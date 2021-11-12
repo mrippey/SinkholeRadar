@@ -2,7 +2,7 @@ import requests
 import mmh3 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from modules import shodan_results
+from modules import shodan_results, riskiq_results
 from dataclasses import dataclass
 
 load_dotenv()
@@ -75,7 +75,7 @@ class SinkholeRadar:
         self.process_ipaddr(self.target)
         self.get_vendor_info()
         shodan_results.shodan_request(self.target)
-
+	riskiq_results.request_riskiq(self.target)
 
 def menu():
     print("""
