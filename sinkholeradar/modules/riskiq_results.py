@@ -15,13 +15,15 @@ def request_riskiq(target: str):
     data = {'query': target}
 
     try:
-       response = requests.get(url, auth=auth, json=data, headers=headers)
-       result_data = response.json()
 
-	for items in result_data['results']:
-            sinkholed_domains.append(items['resolve'][:10]
-          
-	 print(f'[+] Resolution: {",".join(map(str, sinkholed_domains))}')
+        response = requests.get(url, auth=auth, json=data, headers=headers)
+        result_data = response.json()
+
+        for items in result_data['results']:
+            sinkholed_domains.append(items['resolve'][:10])
+        
+        print(f'[+] Resolution: {",".join(map(str, sinkholed_domains))}')
+        print()
 
     except requests.exceptions.Timeout:
         raise(f'[!] Page timed out for {target}')
