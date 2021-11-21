@@ -1,21 +1,12 @@
-import requests
-import mmh3 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from sinkholeradar.modules import shodan_results, riskiq_results
-from dataclasses import dataclass
-import pymongo
+from database_stuff import Example
+import httpx
+import mmh3 
+import os
+import shodan 
 
 load_dotenv()
-
-# Items to get from URL :
-# Check for 'sinkhole' [X]
-# Get hash [X]
-# Check tag to get vendor name [X]
-# Get screenshot [O]
-# Get open ports [X]
-# Get domain resolutions [O]
-# Dates: current (today) & first_seen [O]
 
 
 class SinkholeRadar:
@@ -26,23 +17,25 @@ class SinkholeRadar:
     def process_ipaddr(self, target):
         
         print(f'[+] Verifying {target} is a sinkhole...\n')
-        self.prepend_http = 'http://'
-        self.response = requests.get(self.prepend_http + target)
+        prepend_http = 'http://'
+        
+        with httpx.Client() as client:
+            self.response = client.get(prepend_http + target)
+           
         self.http_hash = mmh3.hash(self.response.text)
         
-        if 'X-Sinkhole' in self.response.headers or 'sinkhole' in self.response.content.decode('utf-8'):
+        if 'X-Sinkhole' in self.response.headers:
             print('[+] Possible sinkhole identified!\n')
             print(f'[+] http.html_hash: {self.http_hash}')
-
+            print()
         else:
             print('[!] This may not be a sinkhole. Try a manual search.')
             raise SystemExit
 
     def get_vendor_info(self):
-
         soup = BeautifulSoup(self.response.text, 'lxml')
         head_tags = 'h1'
-
+        print('[+] Viewing Header Tag to identify vendor: \n')
         for tag in soup.find_all(head_tags):
             print(tag.name + ' -> ' + tag.text.strip())
             print()
@@ -50,50 +43,96 @@ class SinkholeRadar:
             print()
             while True:
                 user_input = input(find_message)
-                response = user_input.strip()[0].lower()
-                if response not in ['y', 'n']:
-                    print(f'[-] Response {response} not identified')
+                user_response = user_input.strip()[0].lower()
+                if user_response not in ['y', 'n']:
+                    print(f'[-] Response {user_response} not identified')
                     continue
-                if response == 'n':
+                if user_response == 'n':
                     print('Vendor information may be in a different HTML tag, moving on...')
                     break
-                if response == 'y':
+                if user_response == 'y':
+                    print()
                     self.vendor_name = str(input('Vendor name: '))
                     print(f'[+] Vendor {self.vendor_name} saved !\n')
                     break
                 print()
 
-    def connect_database(self):
-        conn_mongo_cli = pymongo.MongoClient()
-        db = conn_mongo_cli['sinkholeradardb']
-        db_collection = db['sinkholeradar']
+    def shodan_request(self):
+        shodan_env_key = os.getenv('SHODAN_APIKEY')
+        shodan_key = shodan.Shodan(shodan_env_key)
+        shodan_results = shodan_key.host(self.target)
+        list_ports = []
+        print('[+] Open ports: \n')
+        try:
+            for ports in shodan_results['data']:
+                list_ports.append(ports['port'])
+                self.open_ports = [x for x in list_ports]
 
-        sys_test = input('Write findings to database? [Y] Yes [N] No: ')
-        answer = sys_test.strip()[0].lower()
-        if answer not in ['y', 'n'] or answer == 'n':
-            print(f'[!] {answer} not identified as a response')
+            print()
+            print(self.open_ports)
+            print()
+        except shodan.APIError as err:
+            print(err)
+
+    def request_riskiq_api(self):
+        url = 'https://api.riskiq.net/pt/v2/dns/passive'
+        api_username = os.getenv('RISKIQ_USERNAME')
+        api_key = os.getenv('RISKIQ_APIKEY')
+        headers = {'User-Agent': 'Threat Research, SinkholeRadar v0.1', 'Content-Type': 'application/json'}
+        auth = (api_username, api_key)
+        data = {'query': self.target}
+        list_domains = []
+        print('[+] Resolutions: \n')
+        try:
+            with httpx.Client() as client:
+                self.riskiq_response = client.get(url, auth=auth, json=data, headers=headers)
+            result_data = self.riskiq_response.json()
+            
+            for items in result_data['results']:
+                list_domains.append(items['resolve'])
+                self.sinkholed_domains = [x for x in list_domains]
+
+            print(self.sinkholed_domains)
+            print()
+
+        except httpx.TimeoutException:
+            raise(f'[!] Page timed out for {self.target}')
+
+        except httpx.RequestError as err:
+            raise(f'[!] {err}')
+
+    def connect_to_database(self):
+        insert_to_db = input('Insert findings to database? [Y] Yes [N] No: ')
+        print()
+        user_answer = insert_to_db.strip()[0].lower()
+        
+        if user_answer not in ['y', 'n']:
+            print(f'[!] {user_answer} not identified as expected response, exiting...')
             raise SystemExit
 
-        if answer == 'y':
-            mylist = [
-                {'Target_IP': self.target},
-                {'Vendor_Name': self.vendor_name},
-                {'HTTP_Hash': self.http_hash},
-                {'Ports': shodan_results.shodan_request(self.target)},
-                {'Resolved_Domains': riskiq_results.request_riskiq(self.target)}
-            ]
+        if user_answer == 'n':
+            print('[-] Not inserting data to database, exiting...')
+            raise SystemExit
 
-        db_collection.insert_many(mylist)
-        conn_mongo_cli.close()
-            
+        if user_answer == 'y':
+            self._build_db_document()
 
+    def _build_db_document(self):
+        mytest = Example()
+        mytest.Target_IP = self.target
+        mytest.Vendor_name = self.vendor_name
+        mytest.Http_Hash = self.http_hash
+        mytest.Open_Ports = self.open_ports
+        mytest.Domains = self.sinkholed_domains
+        mytest.save()
+      
     def run(self):
         self.process_ipaddr(self.target)
-        self.process_ipaddr(self.target)
         self.get_vendor_info()
-        shodan_results.shodan_request(self.target)
-        riskiq_results.request_riskiq(self.target)
-        self.connect_database()
+        self.shodan_request()
+        self.request_riskiq_api()
+        self.connect_to_database()
+        
 
 
 def menu():
@@ -124,7 +163,7 @@ def main():
     print()
     processor = SinkholeRadar(target)
     processor.run()
-
+   
 
 if __name__ == "__main__":
     main()

@@ -1,1 +1,0 @@
-# Author: Michael Rippey
