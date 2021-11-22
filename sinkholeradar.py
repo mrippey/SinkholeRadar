@@ -1,12 +1,15 @@
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from database_stuff import Example
-import httpx
+import requests
 import mmh3 
+import logging
 import os
 import shodan 
 
 load_dotenv()
+
+logging.basicConfig(level=logging.DEBUG, filename='sinkholeradarlog.log', format='%(asctime)s %(levelname)s:%(message)s')
 
 
 class SinkholeRadar:
@@ -19,43 +22,53 @@ class SinkholeRadar:
         print(f'[+] Verifying {target} is a sinkhole...\n')
         prepend_http = 'http://'
         
-        with httpx.Client() as client:
-            self.response = client.get(prepend_http + target)
+        self.response = requests.get(prepend_http + target)
            
         self.http_hash = mmh3.hash(self.response.text)
+
+        sinkhole_headers = ['X-Sinkhole', 'Server: X-SinkHole', 'Server: 360Netlab-sinkhole']
         
-        if 'X-Sinkhole' in self.response.headers:
+        if sinkhole_headers in self.response.headers:
             print('[+] Possible sinkhole identified!\n')
+            logging.debug(f'{target} contains sinkhole indicators')
             print(f'[+] http.html_hash: {self.http_hash}')
+            logging.debug('http_hash written')
             print()
         else:
             print('[!] This may not be a sinkhole. Try a manual search.')
+            logging.debug(f'{target} does not match the sinkhole indicators')
             raise SystemExit
 
     def get_vendor_info(self):
+        self.vendor_name = ''
         soup = BeautifulSoup(self.response.text, 'lxml')
         head_tags = 'h1'
         print('[+] Viewing Header Tag to identify vendor: \n')
         for tag in soup.find_all(head_tags):
+        
             print(tag.name + ' -> ' + tag.text.strip())
             print()
-            find_message = 'Did you find the vendor name?\n[Y] Yes [N] No: '
-            print()
-            while True:
-                user_input = input(find_message)
-                user_response = user_input.strip()[0].lower()
-                if user_response not in ['y', 'n']:
-                    print(f'[-] Response {user_response} not identified')
-                    continue
-                if user_response == 'n':
-                    print('Vendor information may be in a different HTML tag, moving on...')
-                    break
-                if user_response == 'y':
-                    print()
-                    self.vendor_name = str(input('Vendor name: '))
-                    print(f'[+] Vendor {self.vendor_name} saved !\n')
-                    break
+        find_message = 'Did you find the vendor name?\n[Y] Yes [N] No: '
+        print()
+        while True:
+            user_input = input(find_message)
+            user_response = user_input.strip()[0].lower()
+            if user_response not in ['y', 'n']:
+                print(f'[-] Response {user_response} not identified')
+                logging.debug('User response not identified')
+                continue
+            if user_response == 'n':
+                print('Vendor information may be in a different HTML tag, moving on...')
+                self.vendor_name = self.vendor_name
+                logging.debug('User responded "no"')
+                break
+            if user_response == 'y':
                 print()
+                self.vendor_name = str(input('Vendor name: '))
+                print(f'[+] Vendor {self.vendor_name} saved !\n')
+                logging.debug('vendor name successfully saved')
+                break
+            print()
 
     def shodan_request(self):
         shodan_env_key = os.getenv('SHODAN_APIKEY')
@@ -70,6 +83,7 @@ class SinkholeRadar:
 
             print()
             print(self.open_ports)
+            logging.debug('Open ports saved')
             print()
         except shodan.APIError as err:
             print(err)
@@ -84,8 +98,8 @@ class SinkholeRadar:
         list_domains = []
         print('[+] Resolutions: \n')
         try:
-            with httpx.Client() as client:
-                self.riskiq_response = client.get(url, auth=auth, json=data, headers=headers)
+            
+            self.riskiq_response = requests.get(url, auth=auth, json=data, headers=headers)
             result_data = self.riskiq_response.json()
             
             for items in result_data['results']:
@@ -93,12 +107,16 @@ class SinkholeRadar:
                 self.sinkholed_domains = [x for x in list_domains]
 
             print(self.sinkholed_domains)
+            logging.debug(f' {len(self.sinkholed_domains)} Captured domains found')
             print()
 
-        except httpx.TimeoutException:
+        except requests.ReadTimeout:
+            logging.debug('Exception raised')
             raise(f'[!] Page timed out for {self.target}')
+            
 
-        except httpx.RequestError as err:
+        except requests.HTTPError as err:
+            logging.debug('Request Error exception raised')
             raise(f'[!] {err}')
 
     def connect_to_database(self):
@@ -108,14 +126,17 @@ class SinkholeRadar:
         
         if user_answer not in ['y', 'n']:
             print(f'[!] {user_answer} not identified as expected response, exiting...')
+            logging.debug('User response not identified')
             raise SystemExit
 
         if user_answer == 'n':
             print('[-] Not inserting data to database, exiting...')
+            logging.debug('User responded "no"')
             raise SystemExit
 
         if user_answer == 'y':
             self._build_db_document()
+            logging.debug('Data for sinkhole IP address written to database')
 
     def _build_db_document(self):
         mytest = Example()
