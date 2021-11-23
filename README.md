@@ -12,3 +12,6 @@ If the user finds the possible sinkhole and its captured domains interesting, he
 ## Usage
 
 python3 sinkholeradar.py
+
+
+![Screenshot][https://github.com/mrippey/SinkholeRadar/blob/master/images/screenshot_cli.png]
