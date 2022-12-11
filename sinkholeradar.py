@@ -25,10 +25,8 @@ class SinkholeRadar:
         self.response = requests.get(prepend_http + target)
            
         self.http_hash = mmh3.hash(self.response.text)
-
-        sinkhole_headers = ['X-Sinkhole', 'Server: X-SinkHole', 'Server: 360Netlab-sinkhole']
         
-        if sinkhole_headers in self.response.headers:
+        if 'malware' or 'sinkhole'  in self.response.headers:
             print('[+] Possible sinkhole identified!\n')
             logging.debug(f'{target} contains sinkhole indicators')
             print(f'[+] http.html_hash: {self.http_hash}')
